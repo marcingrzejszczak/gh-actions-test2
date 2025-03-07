@@ -1,0 +1,26 @@
+build/
+.gradle/
+out/
+
+code/
+
+*.iml
+*.ipr
+*.iws
+.idea
+
+.classpath
+.project
+.settings/
+.sts4-cache/
+.kotlin/
+bin/
+.factorypath
+.vscode
+.DS_Store
+.java-version
+
+# jcstress
+generated/
+results/
+jcstress-results-*.bin.gz

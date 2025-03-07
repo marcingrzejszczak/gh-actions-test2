@@ -1,0 +1,260 @@
+name: Reset milestones and issues
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  reset-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.TOKEN }}
+
+      - name: Reset and force push
+        run: |
+          NEXT_COMMIT=$(git log --reverse --pretty=%H 4056aa95d9265d2667b1a882b679e036a6cfa038..HEAD | head -1)
+          git reset --hard $NEXT_COMMIT
+          git push --force
+
+      - name: Delete unwanted issues and PRs
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TOKEN }}
+          script: |
+            // Get the actor/user running this workflow
+            const actor = context.actor;
+            console.log(`Current user: ${actor}`);
+            
+            // Get all open and closed issues
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              per_page: 100
+            });
+            
+            // Filter out pull requests and issues not created by the actor
+            // and not in our defined list of issues to preserve
+            const issuesToDelete = issues.filter(issue => {
+              // Keep issues with numbers 1-18 as defined in your reset logic
+              if (issue.number >= 1 && issue.number <= 18) {
+                return false;
+              }
+            
+              // Delete if not created by actor
+              return issue.user.login !== actor;
+            });
+            
+            console.log(`Found ${issuesToDelete.length} issues/PRs to delete`);
+            
+            // Process PRs first (they need to be closed before deletion)
+            for (const item of issuesToDelete) {
+              try {
+                // Check if it's a PR
+                if (item.pull_request) {
+                  // Close PR first if it's open
+                  if (item.state === 'open') {
+                    console.log(`Closing PR #${item.number}`);
+                    await github.rest.pulls.update({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: item.number,
+                      state: 'closed'
+                    });
+                  }
+                }
+            
+                // Delete the issue/PR
+                console.log(`Deleting issue/PR #${item.number} created by ${item.user.login}`);
+                await github.rest.issues.delete({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: item.number
+                });
+              } catch (error) {
+                console.log(`Error processing issue/PR #${item.number}:`, error);
+              }
+            }
+
+      - name: Delete tags and releases
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TOKEN }}
+          script: |
+            async function deleteRelease(tagName) {
+              try {
+                const releases = await github.rest.repos.listReleases({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo
+                });
+            
+                const release = releases.data.find(r => r.tag_name === tagName || r.name === tagName.replace('v', ''));
+                if (release) {
+                  await github.rest.repos.deleteRelease({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    release_id: release.id
+                  });
+                  console.log(`Successfully deleted release for ${tagName}`);
+                }
+              } catch (error) {
+                console.log(`Error deleting release for ${tagName}:`, error);
+              }
+            }
+
+            async function deleteTag(tagName) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `tags/${tagName}`
+                });
+                console.log(`Successfully deleted tag ${tagName}`);
+              } catch (error) {
+                console.log(`Error deleting tag ${tagName}:`, error);
+              }
+            }
+
+            const tagsToDelete = ['v0.1.1', 'v0.2.0-M2', 'v1.0.0-RC1', 'v2.0.0'];
+            
+            for (const tag of tagsToDelete) {
+              await deleteRelease(tag);
+              await deleteTag(tag);
+            }
+
+      - name: Delete milestones
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TOKEN }}
+          script: |
+            async function deleteMilestone(title) {
+              try {
+                const milestones = await github.rest.issues.listMilestones({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'all'
+                });
+            
+                const milestone = milestones.data.find(m => m.title === title);
+                if (milestone) {
+                  await github.rest.issues.deleteMilestone({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    milestone_number: milestone.number
+                  });
+                  console.log(`Successfully deleted milestone "${title}"`);
+                }
+              } catch (error) {
+                console.log(`Error deleting milestone "${title}":`, error);
+              }
+            }
+
+            const milestonesToDelete = ['0.1.2', '0.2.0-M3', '1.0.0', '2.0.1'];
+            
+            for (const milestone of milestonesToDelete) {
+              await deleteMilestone(milestone);
+            }
+
+      - name: Reopen closed milestones
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TOKEN }}
+          script: |
+            async function reopenMilestone(title) {
+              try {
+                const milestones = await github.rest.issues.listMilestones({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'all'
+                });
+            
+                const milestone = milestones.data.find(m => m.title === title);
+                if (milestone) {
+                  await github.rest.issues.updateMilestone({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    milestone_number: milestone.number,
+                    state: 'open'
+                  });
+                  console.log(`Successfully reopened milestone "${title}"`);
+                } else {
+                  console.log(`Milestone "${title}" not found`);
+                }
+              } catch (error) {
+                console.log(`Error reopening milestone "${title}":`, error);
+              }
+            }
+
+            const milestonesToReopen = ['0.1.1', '0.2.0-M2', '1.0.0-RC1', '2.0.0'];
+            
+            for (const milestone of milestonesToReopen) {
+              await reopenMilestone(milestone);
+            }
+
+      - name: Reset issues state
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TOKEN }}
+          script: |
+            // Define issue states
+            const issueStates = [
+              { number: 1, title: "Open issue in concrete 1.0.0-RC1", state: "open", milestone: "1.0.0-RC1" },
+              { number: 2, title: "Closed issue in generic 1.0.x", state: "closed", milestone: "1.0.x" },
+              { number: 3, title: "Closed bug in concrete 1.0.0-RC1", state: "closed", milestone: "1.0.0-RC1" },
+              { number: 4, title: "Closed bug in generic 1.0.x", state: "closed", milestone: "1.0.x" },
+              { number: 5, title: "Closed enhancement in generic 1.0.x", state: "closed", milestone: "1.0.x" },
+              { number: 6, title: "Open enhancement in generic 1.0.x", state: "open", milestone: "1.0.x" },
+              { number: 7, title: "Open enhancement in generic 0.1.x", state: "open", milestone: "0.1.x" },
+              { number: 8, title: "Closed enhancement in generic 0.1.x", state: "closed", milestone: "0.1.x" },
+              { number: 9, title: "Closed bug in generic 0.1.x", state: "closed", milestone: "0.1.x" },
+              { number: 10, title: "Closed issue in generic 0.1.x", state: "closed", milestone: "0.1.x" },
+              { number: 11, title: "Open issue in concrete 0.1.1", state: "open", milestone: "0.1.1" },
+              { number: 12, title: "Closed bug in concrete 0.1.1", state: "closed", milestone: "0.1.1" },
+              { number: 13, title: "Open enhancement in generic 0.2.x", state: "open", milestone: "0.2.x" },
+              { number: 14, title: "Closed enhancement in generic 0.2.x", state: "closed", milestone: "0.2.x" },
+              { number: 15, title: "Closed bug in generic 0.2.x", state: "closed", milestone: "0.2.x" },
+              { number: 16, title: "Closed issue in generic 0.2.x", state: "closed", milestone: "0.2.x" },
+              { number: 17, title: "Open issue in concrete 0.2.0-M2", state: "open", milestone: "0.2.0-M2" },
+              { number: 18, title: "Closed bug in concrete 0.2.0-M2", state: "closed", milestone: "0.2.0-M2" },
+              { number: 282, title: "Open bug in concrete 2.0.0", state: "open", milestone: "2.0.0" },
+              { number: 283, title: "Closed enhancement in concrete 2.0.0", state: "closed", milestone: "2.0.0" }
+            ];
+
+            async function getMilestoneNumber(title) {
+              const milestones = await github.rest.issues.listMilestones({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'all'
+              });
+            
+              const milestone = milestones.data.find(m => m.title === title);
+              return milestone ? milestone.number : null;
+            }
+
+            // Update each issue
+            for (const issue of issueStates) {
+              try {
+                const milestoneNumber = await getMilestoneNumber(issue.milestone);
+                if (milestoneNumber) {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    state: issue.state,
+                    milestone: milestoneNumber
+                  });
+                  console.log(`Successfully updated issue #${issue.number}`);
+                } else {
+                  console.log(`Milestone "${issue.milestone}" not found for issue #${issue.number}`);
+                }
+              } catch (error) {
+                console.log(`Error updating issue #${issue.number}:`, error);
+              }
+            }
